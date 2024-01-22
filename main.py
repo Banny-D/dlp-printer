@@ -15,11 +15,14 @@ class DrawRect(QWidget):
 
         self.start_point = None
         self.end_point = None
-        self.start = False
-        self.drawing = False
+        self.radius_tracking = False
         self.radius = 0
+        # 默认设置
+        self.r_size = 20  # 默认线宽
+        self.out_win = 'out_fullscreen' # 默认输出窗口名称
 
         self.init_ui()
+        self.init_out_window()
         self.cap = cv2.VideoCapture(0)
 
     def init_ui(self):
@@ -29,6 +32,8 @@ class DrawRect(QWidget):
         # 图像显示区域
         self.image_area = QLabel(self)
         self.image_area.setCursor(Qt.CrossCursor)
+        # self.image_area.setFixedSize(640, 480) # 默认大小
+        # self.image_area.setScaledContents(True) # 自适应调整大小
         # 鼠标坐标
         self.mouse_x = QLabel('X:', self)
         self.mouse_y = QLabel('y:', self)
@@ -42,8 +47,8 @@ class DrawRect(QWidget):
         
         # 组件布局
         layout = QVBoxLayout(self)
-        layout.addStretch(1)
-        layout.addWidget(self.image_area)
+        # layout.addStretch(1)
+        layout.addWidget(self.image_area, alignment=Qt.AlignCenter)
         hbox = QHBoxLayout()
         hbox.addStretch(1)
         hbox.addWidget(self.mouse_x)
@@ -63,73 +68,88 @@ class DrawRect(QWidget):
         self.timer.start(30)
         self.image_area.setMouseTracking(True) # 图像区域跟踪
         self.image_area.mouseMoveEvent = self.show_mouse_position
+        self.image_area.mousePressEvent = self.mousePressEvent
 
+    def init_out_window(self):
+        cv2.namedWindow(self.out_win, cv2.WND_PROP_FULLSCREEN)
+        # 屏幕设置
+        screens = QApplication.desktop()
+        if screens.screenCount() > 1:
+            # 屏幕位置大小
+            geometry = QApplication.desktop().screenGeometry(1)
+            # 移动屏幕
+            cv2.moveWindow(self.out_win, geometry.x(), geometry.y())
+        else:
+            geometry = QApplication.desktop().screenGeometry()
+        self.out_img = np.zeros((geometry.height(), geometry.width(), 3), np.uint8)
+        cv2.imshow(self.out_win, self.out_img)
+        cv2.setWindowProperty(self.out_win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    
     def show_mouse_position(self, event):
         x = event.x()
         y = event.y()
         self.mouse_x.setText(f'X: {x}')
         self.mouse_y.setText(f'Y: {y}')
-        if self.start:
+        if self.radius_tracking:
             self.end_point = event.pos()
             self.radius = self.calc_radius()
-            self.drawing = True
         self.update()
     
     def update_frame(self):
         ret, frame = self.cap.read()
         if ret:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            if self.drawing:
-                cv2.circle(frame, (int(self.start_point.x()), int(self.start_point.y())), self.radius, (255, 255, 255), 20)
+            if self.start_point is not None:
+                cv2.circle(frame, (int(self.start_point.x()), int(self.start_point.y())), self.radius, (255, 255, 255), self.r_size)
             h, w, ch = frame.shape
             bytes_per_line = ch * w
             convert_to_Qt_format = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            p = convert_to_Qt_format.scaled(640, 480, Qt.IgnoreAspectRatio)
-            # self.pw = p.width()
-            # self.ph = p.height()
+            p = convert_to_Qt_format.scaled(w, h, Qt.IgnoreAspectRatio)
             self.image_area.setPixmap(QPixmap.fromImage(p))
             self.image_area.lower()
 
     def mousePressEvent(self, event):
+        # 左键点击
         if event.buttons() == Qt.LeftButton:
-            if not self.start:
-                self.start_point = event.pos()  # 获取鼠标位置
-                self.start = True
-        elif event.buttons() == Qt.RightButton:
-            if not self.start:
-                self.timer_id = self.timer.start(800)
-                self.start = True
-            else:
-                self.timer.stop()
-                self.start = False
-        else:
-            self.drawing2 = True
-            self.update()
+            if self.start_point is None or not self.radius_tracking: # 未确定圆心
+                self.start_point = event.pos()  # 获取鼠标位置确定圆心
+                self.radius = 0
+                self.radius_tracking = True # 根据鼠标位置实时绘画
+            elif self.start_point is not None and self.radius_tracking: # 没有确定终点
+                self.radius_tracking = False # 停止跟踪
+                # self.end_point = event.pos()
+                # self.radius = self.calc_radius()
+        if event.buttons() == Qt.RightButton:
+            self.start_point = None
+            self.end_point = None
+            self.radius_tracking = False
+            self.radius = 0
+        self.update()
 
     def wheelEvent(self, event):# 滚轮事件
-        angle = event.angleDelta() / 8  # 返回QPoint对象，为滚轮转过的数值，单位为1/8度
-        angleY = angle.y()
-        if angleY > 0:# 滚轮上滚
-            self.radius = self.radius - 1
-            self.drawing = True
-            self.update()
-        else:  # 滚轮下滚
-            self.radius = self.radius + 1
-            self.drawing = True
-            self.update()
-
-    def mouseReleaseEvent(self, event):
-        if self.drawing:
-            self.drawing = False
-            self.start = False
+        if self.start_point is not None:
+            angle = event.angleDelta() / 8  # 返回QPoint对象，为滚轮转过的数值，单位为1/8度
+            angleY = angle.y()
+            if angleY > 0:# 滚轮上滚
+                if self.r_size > 1:
+                    self.r_size = self.r_size - 1
+                    self.update()
+            else:  # 滚轮下滚
+                if self.r_size < self.radius:
+                    self.r_size = self.r_size + 1
+                    self.update()
     
     def calc_radius(self):
         return int(math.sqrt(
             (self.start_point.x() - self.end_point.x()) ** 2 + (self.start_point.y() - self.end_point.y()) ** 2))
     
     def update_image(self):
-        # TODO 副屏显示更新
-        pass
+        img = np.zeros((self.image_area.height(), self.image_area.width(), 3), np.uint8)
+        if self.start_point is not None:
+                cv2.circle(img, (int(self.start_point.x()), int(self.start_point.y())), self.radius, (255, 255, 255), self.r_size)
+        self.out_img = cv2.resize(img, (self.out_img.shape[1], self.out_img.shape[0]))
+        cv2.imshow(self.out_win, self.out_img)
+        # cv2.setWindowProperty(self.out_win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
