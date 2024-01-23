@@ -16,14 +16,11 @@ class DrawRect(QWidget):
         self.start_point = None
         self.end_point = None
         self.radius_tracking = False
-        # self.radius = 0
-        # 默认设置
-        # self.r_size = 20  # 默认线宽
         self.out_win = 'out_fullscreen' # 默认输出窗口名称
 
         self.init_ui()
         self.init_out_window()
-        self.cap = cv2.VideoCapture(0)
+        self.init_camera()
 
     def init_ui(self):
         # TODO 初始化布局
@@ -34,14 +31,20 @@ class DrawRect(QWidget):
         self.image_area.setCursor(Qt.CrossCursor)
         # 鼠标坐标
         self.mouse_lct = QLabel('X: Y:', self)
+        # 曝光强度
+        self.exposure_box = QSlider(Qt.Horizontal)
+        self.exposure_box.setRange(0 , 200)
+        self.exposure_box.setValue(100)
+        # self.exposure_box.setSingleStep(0.1)
+        self.exposure_box.setFixedWidth(500)
         # 下拉框
         self.shape_box = QComboBox(self)
         self.shape_box.addItems(['圆', '正方形', '三角形'])
         # 是否中空
-        self.is_hollow = QCheckBox('中空')
+        self.is_hollow = QCheckBox(self)
         self.is_hollow.setChecked(True)
         # 是否固定形状
-        self.is_stable = QCheckBox('固定形状')
+        self.is_stable = QCheckBox(self)
         self.is_stable.setChecked(True)
         # 自定义半径
         self.radius_box = QSpinBox(self)
@@ -67,17 +70,25 @@ class DrawRect(QWidget):
         # layout.addStretch(1)
         layout.addWidget(self.image_area, alignment = Qt.AlignCenter)
         layout.addWidget(self.mouse_lct, alignment = Qt.AlignRight)
+        # layout.addWidget(self.exposure_slider, alignment = Qt.AlignLeft)
         settings_layout = QGridLayout()
-        settings_layout.addWidget(QLabel('形状', self), 0, 0, Qt.AlignRight)
-        settings_layout.addWidget(self.shape_box, 0, 1, Qt.AlignLeft)
-        settings_layout.addWidget(self.is_hollow, 0, 3, Qt.AlignLeft)
-        settings_layout.addWidget(self.is_stable, 0, 5, Qt.AlignLeft)
-        settings_layout.addWidget(QLabel('大小', self), 1, 0, Qt.AlignRight)
-        settings_layout.addWidget(self.radius_box, 1, 1, Qt.AlignLeft)
-        settings_layout.addWidget(QLabel('宽度', self), 1, 2, Qt.AlignRight)
-        settings_layout.addWidget(self.r_size_box, 1, 3, Qt.AlignLeft)
-        settings_layout.addWidget(QLabel('旋转', self), 1, 4, Qt.AlignRight)
-        settings_layout.addWidget(self.rotate_box, 1, 5, Qt.AlignLeft)
+        i = 0
+        settings_layout.addWidget(QLabel('曝光强度', self), i, 0, Qt.AlignRight)
+        settings_layout.addWidget(self.exposure_box, i, 1, 1, 5, Qt.AlignLeft)
+        i = 1
+        settings_layout.addWidget(QLabel('形状', self), i, 0, Qt.AlignRight)
+        settings_layout.addWidget(self.shape_box, i, 1, Qt.AlignLeft)
+        settings_layout.addWidget(QLabel('中空', self), i, 2, Qt.AlignRight)
+        settings_layout.addWidget(self.is_hollow, i, 3, Qt.AlignLeft)
+        settings_layout.addWidget(QLabel('固定形状', self), i, 4, Qt.AlignRight)
+        settings_layout.addWidget(self.is_stable, i, 5, Qt.AlignLeft)
+        i = 2
+        settings_layout.addWidget(QLabel('大小', self), i, 0, Qt.AlignRight)
+        settings_layout.addWidget(self.radius_box, i, 1, Qt.AlignLeft)
+        settings_layout.addWidget(QLabel('宽度', self), i, 2, Qt.AlignRight)
+        settings_layout.addWidget(self.r_size_box, i, 3, Qt.AlignLeft)
+        settings_layout.addWidget(QLabel('旋转', self), i, 4, Qt.AlignRight)
+        settings_layout.addWidget(self.rotate_box, i, 5, Qt.AlignLeft)
         layout.addLayout(settings_layout)
         layout.addWidget(self.update_button)
         layout.addWidget(self.quit_button)
@@ -96,6 +107,7 @@ class DrawRect(QWidget):
         # self.is_stable.stateChanged.connect(self.paint_area_reset)
         self.is_stable.stateChanged.connect(self.checkbox_changed)
         self.is_hollow.stateChanged.connect(self.checkbox_changed)
+        self.exposure_box.valueChanged.connect(self.update_frame)
 
     def init_out_window(self):
         cv2.namedWindow(self.out_win, cv2.WND_PROP_FULLSCREEN)
@@ -112,6 +124,16 @@ class DrawRect(QWidget):
         cv2.imshow(self.out_win, self.out_img)
         cv2.setWindowProperty(self.out_win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     
+    def init_camera(self):
+        self.cap = cv2.VideoCapture(0)
+        # 读取原本宽高
+        width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        # 等比重置宽高
+        if width > 800:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(800/width*height))
+
     def show_mouse_position(self, event):
         x = event.x()
         y = event.y()
@@ -125,20 +147,10 @@ class DrawRect(QWidget):
         ret, frame = self.cap.read()
         if ret:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            if self.start_point is not None:
-                self.paint_by_cv2(frame)
-            #     if self.shape_box.currentText() == '圆':
-            #         if self.is_hollow.isChecked(): # 空心
-            #             cv2.circle(frame, (int(self.start_point.x()), int(self.start_point.y())), 
-            #                self.radius_box.value(), (255, 255, 255), self.r_size_box.value())
-            #         else: #实心
-            #             cv2.circle(frame, (int(self.start_point.x()), int(self.start_point.y())), 
-            #                self.radius_box.value(), (255, 255, 255), -1)
-            #     elif self.shape_box.currentText() == '正方形':
-            #         pass
-            #     elif self.shape_box.currentText() == '三角形':
-            #         pass
+            frame = cv2.addWeighted(frame, self.exposure_box.value()/100, 0, 0, 0)
             h, w, ch = frame.shape
+            if self.start_point is not None:
+                self.paint_by_cv2(frame)  
             bytes_per_line = ch * w
             convert_to_Qt_format = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
             p = convert_to_Qt_format.scaled(w, h, Qt.IgnoreAspectRatio)
