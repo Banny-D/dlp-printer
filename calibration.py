@@ -13,9 +13,17 @@ import time
 camera_realtime = False
 
 class PrinterThread(QThread):
-    reset_printer_signal = pyqtSignal(bool)
+    reset_printer_signal = pyqtSignal(int, int)
+    continue_signal = pyqtSignal()
+
     def __init__(self) -> None:
         super().__init__()
+        self.init_out()
+        self.mutex = QMutex() # 线程锁
+        self.condition = QWaitCondition()
+        self.is_waiting = False # 是否等待
+        
+    def init_out(self):
         self.out_win = 'out_fullscreen' # 默认输出窗口名称
         cv2.namedWindow(self.out_win, cv2.WND_PROP_FULLSCREEN)
         # 屏幕设置
@@ -33,35 +41,47 @@ class PrinterThread(QThread):
         cv2.imshow(self.out_win, self.out_img)
         cv2.setWindowProperty(self.out_win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         print('投影设置完成')
-    
+
     def reset_out_img(self):
         self.out_img = np.zeros((self.out_geo.height(), self.out_geo.width(), 3), np.uint8)
     
     def update_out_window(self):
         cv2.imshow(self.out_win, self.out_img)
         cv2.setWindowProperty(self.out_win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        self.reset_printer_signal.emit(True)
     
     def run(self):
         # self.reset_out_img()
         l_unit = int(min(self.out_img.shape[0], self.out_img.shape[1]) * 0.1) # 单位间隔
         c_point = (self.out_img.shape[1] // 2, self.out_img.shape[0] // 2)
         for i in range(5):
-            print(f'i = {i}')
+            # print(f'i = {i}')
             if i == 0:
                 self.reset_out_img()
                 self.out_img = draw_circle(self.out_img, c_point)
                 self.update_out_window()
-                time.sleep(1)
+                self.reset_printer_signal.emit(c_point[0], c_point[1])
+                self.wait_signal()
                 continue
             for j in range(8):
-                print(f'j = {j}')
+                # print(f'j = {j}')
                 self.reset_out_img()
                 point = get_point_by_radius(c_point, l_unit*i, j)
                 self.out_img = draw_circle(self.out_img, point)
                 self.update_out_window()
-                time.sleep(1)
+                self.reset_printer_signal.emit(point[0], point[1])
+                self.wait_signal()
         print('ok')
+
+    def wait_signal(self):
+        self.mutex.lock()
+        self.is_waiting = True
+        self.condition.wait(self.mutex)
+        time.sleep(1)
+        self.mutex.unlock()
+    
+    def resume(self):
+        self.is_waiting = False
+        self.condition.wakeAll()
 
 class CameraCali(QWidget):
     def __init__(self) -> None:
@@ -124,8 +144,6 @@ class CameraCali(QWidget):
         self.camera_box.setCurrentIndex(0)
         self.reset_camera()
         print('读取完成')
-
-    
     
     def reset_camera(self):
         self.cap = cv2.VideoCapture(self.camera_box.currentIndex())
@@ -168,32 +186,17 @@ class CameraCali(QWidget):
         points_scr = []
         self.printer_thread.start()
         self.printer_thread.reset_printer_signal.connect(self.print_test)
-        # l_unit = int(min(self.out_img.shape[0], self.out_img.shape[1]) * 0.1) # 单位间隔
-        # c_point = (self.out_img.shape[1] // 2, self.out_img.shape[0] // 2)
-        # for i in range(2):
-        #     print(f'i = {i}')
-        #     if i == 0:
-        #         self.reset_out_img()
-        #         self.out_img = draw_circle(self.out_img, c_point)
-        #         self.update_out_window()
-        #         time.sleep(1)
-        #         continue
-        #     for j in range(8):
-        #         print(f'j = {j}')
-        #         self.reset_out_img()
-        #         point = get_point_by_radius(c_point, l_unit*i, j)
-        #         self.out_img = draw_circle(self.out_img, point)
-        #         self.update_out_window()
-        #         time.sleep(1)
-        # print('ok')
 
     def restart(self):
         self.timer.start(30)
         self.start_cali = False
         self.thresh_slider.setDisabled(False)
     
-    def print_test(self, status): #调试用的函数
-        print(status)
+    def print_test(self, x, y): #调试用的函数
+        # 获得现在屏幕显示的点坐标
+        print([x, y])
+        # 继续进程
+        self.printer_thread.resume()
 
 def draw_center_cross(img, line_w=2):
     c_x = img.shape[1] // 2
