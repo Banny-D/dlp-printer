@@ -10,7 +10,7 @@ from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 import time
 
-camera_realtime = False
+camera_realtime = True
 sleep_time = 0.5 # 间隔时间
 
 class PrinterThread(QThread):
@@ -91,18 +91,79 @@ class PrinterThread(QThread):
         # print('进程终止')
         # return
 
+class CameraThread(QThread):
+    camera_list_signal = pyqtSignal(list)
+    
+    def __init__(self) -> None:
+        super().__init__()
+        self.is_waiting = False # 等待
+        self.is_running = True
+        self.cam_list = []
+        self.cam_width = 600 # 视频最大宽度
+        self.mutex = QMutex() # 线程锁
+        self.condition = QWaitCondition()
+        self.frame = None
+    
+    def get_camera_list(self):
+        # 读取相机列表
+        print('正在读取相机')
+        for i in range(5):
+            cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                break
+            self.cam_list.append('相机' + str(i+1))
+            cap.release()
+            print(f'已读取到相机{i+1}...')
+        self.camera_list_signal.emit(self.cam_list)
+        print('读取相机列表完成')
+    
+    def reset(self, cap_num):
+        self.is_waiting = True # 暂停
+        print(f'reset as cam {cap_num + 1}')
+        self.frame = None
+        self.cap = cv2.VideoCapture(cap_num, cv2.CAP_DSHOW)
+        # 读取原本宽高
+        width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+        height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        # 等比重置宽高
+        if width > self.cam_width:
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cam_width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(self.cam_width/width*height))
+        self.resume()
+    
+    def run(self):
+        self.get_camera_list()
+        self.reset(0)
+        while self.is_running:
+            self.mutex.lock()
+            if self.is_waiting:
+                self.condition.wait(self.mutex)
+            ret, frame = self.cap.read()
+            if ret: self.frame = frame
+            self.mutex.unlock()
+    
+    def resume(self):
+        self.is_waiting = False
+        self.condition.wakeAll()
+    
+    def kill(self):
+        self.is_running = False
+
+
 class CameraCali(QWidget):
+    change_camera_signal = pyqtSignal(int)
+
     def __init__(self) -> None:
         super().__init__()
         self.win_name = 'Camera Calibration' # 默认输出窗口名称
         self.start_cali = False # 是否开始校准程序
         self.center_point = None # 识别到的中心点
         self.init_ui()
+        self.init_pinter()
         if camera_realtime:
             self.init_camera()
         else:
             self.brg_frame = cv2.imread('pic.jpg')
-        self.init_pinter()
 
     def init_ui(self):
         self.setWindowTitle('相机校准')
@@ -138,7 +199,7 @@ class CameraCali(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.camera_box)
         layout.addWidget(self.image_area, alignment = Qt.AlignCenter)
-        thresh_layout = QHBoxLayout(self)
+        thresh_layout = QHBoxLayout()
         thresh_layout.addWidget(self.thresh_slider)
         thresh_layout.addWidget(self.image_type_box)
         layout.addLayout(thresh_layout)
@@ -146,59 +207,53 @@ class CameraCali(QWidget):
         layout.addWidget(self.restart_button)
 
     def init_camera(self):
-        # 读取相机列表
-        print('正在读取相机')
-        for i in range(5):
-            cap = cv2.VideoCapture(i)
-            if not cap.isOpened():
-                break
-            self.camera_box.addItem('相机' + str(i+1))
-            print(f'读取相机{i+1}...')
-            cap.release()
-        self.camera_box.setCurrentIndex(0)
-        self.reset_camera()
-        print('读取完成')
+        self.camera_thread = CameraThread()
+        # 信号连接（线程->主程序）
+        self.camera_thread.camera_list_signal.connect(self.reset_cam_list)
+        # 信号连接（主程序->线程）
+        self.change_camera_signal.connect(self.camera_thread.reset)
+        # 开始进程
+        self.camera_thread.start()
     
     def init_pinter(self):
         self.printer_thread = PrinterThread()
+        # 信号连接（线程->主程序）
         self.printer_thread.reset_printer_signal.connect(self.cali_get_points)
         self.printer_thread.completed_signal.connect(self.output_text)
 
+    def reset_cam_list(self, cam_list):
+        for cam_name in cam_list:
+            self.camera_box.addItem(cam_name)
+        self.camera_box.setCurrentIndex(0)
+        self.reset_camera()
+    
     def reset_camera(self):
-        self.cap = cv2.VideoCapture(self.camera_box.currentIndex())
-        # 读取原本宽高
-        width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-        # 等比重置宽高
-        if width > 800:
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 800)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, int(800/width*height))
-
+        self.change_camera_signal.emit(self.camera_box.currentIndex())
+    
     def update_frame(self):
         self.center_point = None
         if camera_realtime: # 实时成像
-            ret, frame = self.cap.read()
+            frame = self.camera_thread.frame
         else: # 图片
             frame = self.brg_frame
-            ret = True
-        if ret:
-            frame_bi = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            _ , frame_bi = cv2.threshold(frame_bi, self.thresh_slider.value(), 255, cv2.THRESH_BINARY)
-            # 找到中心
-            self.center_point = find_center(frame_bi)
-            # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            if self.image_type_box.currentIndex() == 0:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            elif self.image_type_box.currentIndex() == 1:
-                frame = cv2.cvtColor(frame_bi, cv2.COLOR_GRAY2RGB)
-            # 画十字
-            if self.center_point is not None:
-                frame = draw_cross(frame, self.center_point, 10)
-            h, w, ch = frame.shape
-            bytes_per_line = ch * w
-            convert_to_Qt_format = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            p = convert_to_Qt_format.scaled(w, h, Qt.IgnoreAspectRatio)
-            self.image_area.setPixmap(QPixmap.fromImage(p))
+        if frame is None: return
+        frame_bi = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        _ , frame_bi = cv2.threshold(frame_bi, self.thresh_slider.value(), 255, cv2.THRESH_BINARY)
+        # 找到中心
+        self.center_point = find_center(frame_bi)
+        # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if self.image_type_box.currentIndex() == 0:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        elif self.image_type_box.currentIndex() == 1:
+            frame = cv2.cvtColor(frame_bi, cv2.COLOR_GRAY2RGB)
+        # 画十字
+        if self.center_point is not None:
+            frame = draw_cross(frame, self.center_point, 10)
+        h, w, ch = frame.shape
+        bytes_per_line = ch * w
+        convert_to_Qt_format = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+        p = convert_to_Qt_format.scaled(w, h, Qt.IgnoreAspectRatio)
+        self.image_area.setPixmap(QPixmap.fromImage(p))
 
     def cali_start_func(self):
         self.start_cali = True
@@ -231,6 +286,11 @@ class CameraCali(QWidget):
         self.printer_thread.resume()
     
     def output_text(self):# 输出变换矩阵
+        points_len = len(self.points_cam)
+        if points_len == 0: # 没有匹配的点
+            pass
+        elif points_len < 4: #
+            pass
         np.savetxt('points_scr.csv', self.points_scr, delimiter = ',', fmt='%d')
         np.savetxt('points_cam.csv', self.points_cam, delimiter = ',', fmt='%d')
         print('ok')
