@@ -239,6 +239,8 @@ class CameraCali(QWidget):
         if frame is None: return
         frame_bi = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         _ , frame_bi = cv2.threshold(frame_bi, self.thresh_slider.value(), 255, cv2.THRESH_BINARY)
+        kernel = np.ones((8, 8), np.uint8)
+        frame_bi = cv2.morphologyEx(frame_bi, cv2.MORPH_OPEN, kernel, iterations=1)  # iterations进行3次操作
         # 找到中心
         self.center_point = find_center(frame_bi)
         # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -288,11 +290,39 @@ class CameraCali(QWidget):
     def output_text(self):# 输出变换矩阵
         points_len = len(self.points_cam)
         if points_len == 0: # 没有匹配的点
-            pass
-        elif points_len < 4: #
-            pass
+            # 将中心位置对应
+            delta_x = np.float32(self.printer_thread.out_geo.height()/2 - self.camera_thread.frame.shape[1]/2)
+            delta_y = np.float32(self.printer_thread.out_geo.width()/2 - self.camera_thread.frame.shape[0]/2)
+            M = [[1, 0, delta_x],
+                 [0, 1, delta_y],
+                 [0, 0, 1]]
+            print(f'没有得到任何有效点，请调节阈值并重新尝试')
+        elif points_len ==1:
+            delta_x = np.float32(self.points_scr[0][0] - self.points_cam[0][0])
+            delta_y = np.float32(self.points_scr[0][1] - self.points_cam[0][1])
+            M = [[1, 0, delta_x],
+                 [0, 1, delta_y],
+                 [0, 0, 1]]
+            print(f'共 {points_len} 个有效点，仅作平移变换')
+        elif points_len == 2: # 相似变换
+            p_cam = np.array(self.points_cam, dtype=np.float32)
+            p_scr = np.array(self.points_scr, dtype=np.float32)
+            M = np.vstack([cv2.estimateAffinePartial2D(p_cam, p_scr)[0], [0,0,1]])
+            print(f'共 {points_len} 个有效点，仅作相似变换')
+        elif points_len == 3: # 仿射变换
+            p_cam = np.array(self.points_cam, dtype=np.float32)
+            p_scr = np.array(self.points_scr, dtype=np.float32)
+            M = np.vstack([cv2.getAffineTransform(p_cam, p_scr), [0,0,1]])
+            print(f'共 {points_len} 个有效点，进行仿射变换')
+        else: # 透视变换
+            p_cam = np.array(self.points_cam, dtype=np.float32)
+            p_scr = np.array(self.points_scr, dtype=np.float32)
+            M = cv2.findHomography(p_cam, p_scr)[0]
+            print(f'共 {points_len} 个有效点，进行多点透视变换')
+
         np.savetxt('points_scr.csv', self.points_scr, delimiter = ',', fmt='%d')
         np.savetxt('points_cam.csv', self.points_cam, delimiter = ',', fmt='%d')
+        np.savetxt('Matrix.csv', M, delimiter = ',')
         print('ok')
 
 def draw_center_cross(img, line_w=2):
