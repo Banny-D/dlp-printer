@@ -9,6 +9,8 @@ from PyQt5.QtWidgets import *
 from PyQt5.QtCore import *
 from PyQt5.QtGui import *
 
+# from cali import
+
 class DrawRect(QWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -21,6 +23,8 @@ class DrawRect(QWidget):
         self.init_ui()
         self.init_out_window()
         self.init_camera()
+        # 读取变换矩阵matrix
+        self.read_trans_matrix()
 
     def init_ui(self):
         # TODO 初始化布局
@@ -125,7 +129,7 @@ class DrawRect(QWidget):
         cv2.setWindowProperty(self.out_win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
     
     def init_camera(self):
-        self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
         # 读取原本宽高
         width = self.cap.get(cv2.CAP_PROP_FRAME_WIDTH)
         height = self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
@@ -200,7 +204,7 @@ class DrawRect(QWidget):
         img = np.zeros((self.image_area.height(), self.image_area.width(), 3), np.uint8)
         if self.start_point is not None:
             self.paint_by_cv2(img)
-        self.out_img = cv2.resize(img, (self.out_img.shape[1], self.out_img.shape[0]))
+        self.out_img = cv2.warpPerspective(img, self.M, (self.out_img.shape[1], self.out_img.shape[0]))
         cv2.imshow(self.out_win, self.out_img)
         # cv2.setWindowProperty(self.out_win, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
@@ -266,6 +270,10 @@ class DrawRect(QWidget):
             self.radius_box.setStyleSheet("QSpinBox { background-color: grey; }")
             self.r_size_box.setStyleSheet("QSpinBox { background-color: grey; }")
             self.rotate_box.setStyleSheet("QSpinBox { background-color: grey; }")
+    
+    def read_trans_matrix(self):
+        self.M = np.genfromtxt('Matrix.csv', delimiter=',', dtype=np.float32)
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

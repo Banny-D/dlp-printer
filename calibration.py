@@ -149,7 +149,6 @@ class CameraThread(QThread):
     def kill(self):
         self.is_running = False
 
-
 class CameraCali(QWidget):
     change_camera_signal = pyqtSignal(int)
 
